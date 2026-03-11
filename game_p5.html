@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Longi-Tunal: Audio Reactive Runner</title>
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  
+  <style>
+    body { margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; overflow:hidden; background-color: #000; color: white; font-family: 'Consolas', monospace; }
+    canvas { display: block; box-shadow: 0 0 20px rgba(0,0,0,0.8); }
+  </style>
+</head>
+<body>
+
+<script>
+// --- Themes ---
+const THEMES = {
+  synthwave: {
+    player: [255, 50, 200],
+    enemy_low: [0, 180, 255],
+    enemy_mid: [57, 255, 20],
+    enemy_high: [255, 0, 255],
+    bg: [40, 40, 40],
+    bg_flash: [70, 70, 70],
+    lane_divider: [255, 0, 255]
+  },
+  ice: {
+    player: [200, 255, 255],
+    enemy_low: [0, 150, 255],
+    enemy_mid: [0, 220, 255],
+    enemy_high: [180, 255, 255],
+    bg: [5, 15, 40],
+    bg_flash: [100, 200, 255],
+    lane_divider: [180, 255, 255]
+  }
+};
+
+// --- Globals ---
+let gameState = "START"; // START, RUNNING, GAME_OVER
+let currentThemeName = "ice";
+let theme = THEMES[currentThemeName];
+let score = 0;
+let lastThemeChangeScore = 0;
+let spectrum = [];
+let ampHistory = [];
+const AMP_HISTORY_MAX = 30;
+const PITCH_LOW = 150;
+const PITCH_HIGH = 1500;
+
+const lanes = 3;
+let laneHeight;
+let laneCentres = [];
+
+
+// Audio
+let mic, fft, amplitude, peakDetect;
+let beatPulse = 0;
+let smoothedPulse = 0;
+let beatWindow = [];
+let maxBeatWindowSize = 8;
+let lastBeatTime = 0;
+let bpm = 10;
+
+// Game Entities
+let player;
+let enemies = [];
+let speed = 5;
+
+// Background specific varsbpm
+let iceParticles = [];
+let scanLineY = 0;
+
+// --- Hand Tracking Globals ---
+let handVideo;
+let hands;
+let lastHandY = 0;
+let handVelocity = 0;
+const STRUM_THRESHOLD = 0.05; // Sensitivity: lower = easier to strum
+const STRUM_COOLDOWN = 250;   // ms between strums to prevent double-firing
+let lastStrumTime = 0;
+
+function setup() {
+  //frameRate(60)
+  createCanvas(windowWidth, windowHeight);
+  textFont('Consolas');
+
+  laneHeight = windowHeight / lanes;
+  
+  for (let i = 0; i < lanes; i++) {
+    laneCentres.push((i * laneHeight) + (laneHeight / 2));
+  }
+  
+  // Setup Ice Particles
+  for (let i = 0; i < 100; i++) {
+    iceParticles.push({ x: random(width), y: random(height), speed: random(1, 3) });
+  }
+
+  // Setup Audio (Starts listening on first interaction)
+  mic = new p5.AudioIn();
+  amplitude = new p5.Amplitude(0.4);
+  amplitude.setInput(mic);
+  fft = new p5.FFT(0.2, 128);
+  fft.setInput(mic);
+  peakDetect = new p5.PeakDetect(40, 200, 0.08);
+  initHandTracking();
+  player = new Player();
+}
+
+function draw() {
+  // Update Audio Data
+  spectrum = fft.analyze();
+  peakDetect.update(fft);
+  let currentLevel = amplitude.getLevel();
+  ampHistory.push(currentLevel);
+
+  if (ampHistory.length > AMP_HISTORY_MAX) {
+    ampHistory.shift();
+  }
+  
+  if (peakDetect.isDetected && gameState === "RUNNING") {
+
+  beatPulse = 1;
+
+  let now = millis();
+
+  if (lastBeatTime !== 0) {
+    let interval = now - lastBeatTime;
+    beatWindow.push(interval);
+    if (beatWindow.length > maxBeatWindowSize) {
+      beatWindow.shift();
+    }
+    let avgInterval =
+      beatWindow.reduce((a,b)=>a+b,0) / beatWindow.length;
+    bpm = 60000 / avgInterval;
+
+  }
+
+  lastBeatTime = now;
+  speed = map(bpm, 60, 180, 8, 32, true) + sqrt(score);
+  //speed = speed * (width / 1000); 
+  //speed = clamp(speed,5)
+
+  spawnEnemy();
+
+  }
+
+  beatPulse *= 0.75;
+  if (beatPulse < 0.05) beatPulse = 0;
+  smoothedPulse = max(beatPulse, smoothedPulse * 0.85);
+
+  if (gameState === "START") drawStartScreen();
+  else if (gameState === "RUNNING") runGame();
+  else if (gameState === "GAME_OVER") drawGameOver();
+
+  push();
+  translate(width - 170, height - 130);
+  image(handVideo, 0, 0, 160, 120);
+  // Optional: Draw a line showing the current hand velocity
+  stroke(255, 0, 0);
+  line(80, 60, 80, 60 + handVelocity * 500);
+  pop();
+}
+
+// --- Optimized Tracking Globals ---
+let handHistory = []; 
+const HISTORY_SIZE = 10; // Smaller history for faster response
+
+function initHandTracking() {
+  // Use a smaller video feed to reduce CPU load
+  handVideo = createCapture(VIDEO);
+  handVideo.size(60, 60); 
+  handVideo.hide();
+
+  hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+
+  hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 0, 
+    minDetectionConfidence: 0.4,
+    minTrackingConfidence: 0.5
+  });
+
+  hands.onResults(onHandResults);
+
+  const camera = new Camera(handVideo.elt, {
+    onFrame: async () => {
+      await hands.send({ image: handVideo.elt });
+    },
+    width: 60,
+    height: 60
+  });
+  camera.start();
+}
+
+function onHandResults(results) {
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    let currentY = results.multiHandLandmarks[0][12].y; 
+    
+    // Maintain relative center
+    handHistory.push(currentY);
+    if (handHistory.length > HISTORY_SIZE) handHistory.shift();
+    let avgY = handHistory.reduce((a, b) => a + b, 0) / handHistory.length;
+    
+    handVelocity = currentY - lastHandY;
+    lastHandY = currentY;
+
+    let now = millis();
+    // Reduced cooldown to 150ms for faster consecutive strums
+    if (now - lastStrumTime > STRUM_COOLDOWN && gameState === "RUNNING") {
+      
+      // UP STRUM: Velocity check + Relative Position check
+      if (handVelocity < -STRUM_THRESHOLD && currentY < avgY - 0.01) {
+        if (player.currentLane > 0) {
+          player.currentLane--;
+          lastStrumTime = now;
+        }
+      } 
+      // DOWN STRUM
+      else if (handVelocity > STRUM_THRESHOLD && currentY > avgY + 0.01) {
+        if (player.currentLane < lanes - 1) {
+          player.currentLane++;
+          lastStrumTime = now;
+        }
+      }
+    }
+  }
+}
+
+// --- Main Game Loop ---
+function runGame() {
+  // Check for theme swap
+  if (floor(score) % 15 === 0 && floor(score) !== lastThemeChangeScore && floor(score) > 0) {
+    currentThemeName = currentThemeName === "ice" ? "synthwave" : "ice";
+    theme = THEMES[currentThemeName];
+    lastThemeChangeScore = floor(score);
+  }
+
+  // Draw Background
+  if (currentThemeName === "synthwave") drawSynthwaveBg();
+  else drawIceBg();
+
+  // Draw Lanes
+  stroke(theme.lane_divider[0], theme.lane_divider[1], theme.lane_divider[2], 80);
+  strokeWeight(2);
+  for (let i = 1; i < lanes; i++) {
+    line(0, i * laneHeight, width, i * laneHeight);
+  }
+
+  // Update & Draw Player
+  player.update();
+  player.draw();
+
+  // Update & Draw Enemies
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    let e = enemies[i];
+    e.update(beatPulse);
+    e.draw();
+    
+    // AABB Collision with Player's triangle bounds
+    if (e.x < player.x + 50 && e.x + e.w > player.x &&
+        e.y < player.y + 25 && e.y + e.h > player.y - 25) {
+      gameState = "GAME_OVER";
+    }
+    
+    if (e.x + e.w < 0) {
+      enemies.splice(i, 1);
+      score += 1; // Gain score for surviving
+    }
+  }
+
+  // Draw Score
+  fill(theme.player);
+  noStroke();
+  textSize(30);
+  textAlign(RIGHT, TOP);
+  text(`Score: ${floor(score)}`, width - 20, 20);
+}
+
+// --- Background Renderers ---
+function drawIceBg() {
+  background(theme.bg[0], theme.bg[1], theme.bg[2]);
+  
+  // Flash overlay
+  /*if (beatPulse > 0) {
+    fill(theme.bg_flash[0], theme.bg_flash[1], theme.bg_flash[2], beatPulse * 40);
+    rect(0, 0, width, height);
+  }*/
+
+  // Particles
+  fill(theme.lane_divider);
+  noStroke();
+  for (let p of iceParticles) {
+    p.y += p.speed + beatPulse * 2;
+    p.x += sin(frameCount * 0.05 + p.x) * 0.5;
+    if (p.y > height) { p.y = 0; p.x = random(width); }
+    circle(p.x, p.y, 2);
+  }
+
+  // Stylized Snowflake in center
+  push();
+  translate(width / 2, height / 2);
+  rotate(frameCount * 0.005);
+  let response = pow(smoothedPulse, 0.7);
+  let length = 70 + response * 90;
+  stroke(theme.lane_divider[0], theme.lane_divider[1], theme.lane_divider[2], 150);
+  
+  for (let i = 0; i < 6; i++) {
+    push();
+    rotate((TWO_PI / 6) * i);
+    strokeWeight(3);
+    line(0, 0, length, 0);
+    // Snowflake branches
+    strokeWeight(2);
+    line(length * 0.6, 0, length * 0.8, length * 0.2);
+    line(length * 0.6, 0, length * 0.8, -length * 0.2);
+    line(length * 0.3, 0, length * 0.5, length * 0.15);
+    line(length * 0.3, 0, length * 0.5, -length * 0.15);
+    pop();
+  }
+  pop();
+}
+
+function drawSynthwaveBg() {
+  background(theme.bg[0], theme.bg[1], theme.bg[2]);
+  
+  let sunY = height * 0.95;
+  let response = pow(smoothedPulse, 0.7);
+  let coreR = 145 + response * 50;
+  
+  // Glow
+  noStroke();
+  fill(theme.player[0], theme.player[1], theme.player[2], 40);
+  circle(width/2, sunY, (coreR + beatPulse * 20) * 2.2);
+
+  // Retro Sun (Draw circle, slice with black lines)
+  fill(theme.enemy_high);
+  circle(width/2, sunY, coreR * 2);
+  
+  // Cut lines out of the sun
+  stroke(theme.bg);
+  for (let y = sunY - coreR; y < sunY + coreR; y += 20) {
+    let distFromTop = y - (sunY - coreR);
+    let lineWeight = map(distFromTop, 0, coreR * 2, 0, 15);
+    if (lineWeight > 1) {
+      strokeWeight(lineWeight);
+      line(width/2 - coreR, y, width/2 + coreR, y);
+    }
+  }
+
+  // Scanlines
+  scanLineY = (scanLineY + 1) % 8;
+  stroke(theme.enemy_low[0], theme.enemy_low[1], theme.enemy_low[2], 40);
+  strokeWeight(2);
+  for (let y = scanLineY; y < height; y += 8) {
+    line(0, y, width, y);
+  }
+}
+
+// --- Entities ---
+class Player {
+  constructor() {
+    this.x = 100;
+    this.currentLane = floor(lanes / 2); // Start in middle lane
+    this.y = laneCentres[this.currentLane];
+  }
+  
+  update() {
+    let targetY = laneCentres[this.currentLane];
+    // Smooth glide to lane
+    this.y = lerp(this.y, targetY, 0.3);
+  }
+  
+  draw() {
+    fill(theme.player);
+    noStroke();
+    // Draw the Pygame Right-Facing Triangle: [(0,0), (50,25), (0,50)]
+    push();
+    translate(this.x, this.y - 25); // Offset so y is center
+    beginShape();
+    vertex(0, 0);
+    vertex(50, 25);
+    vertex(0, 50);
+    endShape(CLOSE);
+    pop();
+  }
+}
+
+function spawnEnemy() {
+
+  let nyquist = sampleRate() / 2; // Usually 22050 Hz
+  let lowBin = floor(map(PITCH_LOW, 0, nyquist, 0, spectrum.length));
+  let highBin = floor(map(PITCH_HIGH, 0, nyquist, 0, spectrum.length));
+  
+  let maxAmp = 0;
+  let peakBin = lowBin;
+  
+  for (let i = lowBin; i <= highBin; i++) {
+    if (spectrum[i] > maxAmp) {
+      maxAmp = spectrum[i];
+      peakBin = i;
+    }
+  }
+  
+  // Convert that bin back into a frequency number
+  let peakFreq = map(peakBin, 0, spectrum.length, 0, nyquist);
+  
+  // Scale it between 0.0 and 1.0, exactly like your Python script
+  let scale = (peakFreq - PITCH_LOW) / (PITCH_HIGH - PITCH_LOW);
+  let pitch = constrain(scale, 0.0, 1.0);
+  
+  let pitchTier = 0;
+  if (pitch > 0.66) pitchTier = 2; // High
+  else if (pitch > 0.33) pitchTier = 1; // Mid
+  else pitchTier = 0 //low
+  
+  // Find the quietest and loudest moments from our recent memory
+  let localMin = Math.min(...ampHistory);
+  let localMax = Math.max(...ampHistory);
+  
+  if (localMax - localMin < 0.05) {
+    localMax = localMin + 0.05;
+  }
+
+  let level = amplitude.getLevel();
+
+  let targetLane = floor(map(level, localMin, localMax, lanes - 1, 0, true));
+  
+  enemies.push(new Enemy(targetLane, pitchTier));
+}
+
+class Enemy {
+  constructor(laneIndex, pitchTier) {
+    this.x = width;
+    this.y = laneCentres[laneIndex] - (laneHeight / 4); // Center vertically
+    this.h = laneHeight / 2;
+    
+    if (pitchTier === 0) {
+      this.w = 80; this.colorStr = "enemy_low";
+    } else if (pitchTier === 1) {
+      this.w = 160; this.colorStr = "enemy_mid";
+    } else {
+      this.w = 240; this.colorStr = "enemy_high";
+    }
+  }
+  
+  update(pulse) {
+
+    this.x -= speed  //+ (pulse * 2); // Micro-stutter forward on beats
+  }
+  
+  draw() {
+    let c = theme[this.colorStr];
+    fill(c[0], c[1], c[2]);
+    noStroke();
+    rect(this.x, this.y, this.w, this.h, 10); // border_radius = 10
+  }
+}
+
+// --- Game States ---
+function drawStartScreen() {
+  background(theme.bg);
+  textAlign(CENTER, CENTER);
+  
+  fill(theme.player);
+  textSize(72);
+  text("LONGI - TUNAL", width/2, height/3);
+  
+  fill(theme.lane_divider);
+  textSize(30);
+  text("Click or Press SPACE to Start", width/2, height/2);
+  text("UP/DOWN Arrows to Move", width/2, height/2 + 50);
+}
+
+function drawGameOver() {
+  background(theme.bg[0], theme.bg[1], theme.bg[2], 20); // Fade effect
+  textAlign(CENTER, CENTER);
+  
+  fill(theme.enemy_high);
+  textSize(72);
+  text("GAME OVER", width/2, height/3);
+  
+  fill(theme.player);
+  textSize(30);
+  text(`Score: ${floor(score)}`, width/2, height/2);
+  
+  fill(theme.lane_divider);
+  text("Click or Press SPACE to restart", width/2, height/2 + 50);
+}
+
+// --- Input Handling ---
+function keyPressed() {
+  if (gameState === "START") {
+    userStartAudio(); 
+    mic.start();
+    resetGame();
+    return;
+  }
+  
+  if (gameState === "GAME_OVER") {
+    resetGame();
+    return;
+  }
+
+  // Handle Lane Movement
+  if (gameState === "RUNNING") {
+    if ((keyCode === UP_ARROW || key === 'w' || key === 'W') && player.currentLane > 0) {
+      player.currentLane--;
+    } else if ((keyCode === DOWN_ARROW || key === 's' || key === 'S') && player.currentLane < lanes - 1) {
+      player.currentLane++;
+    }
+  }
+}
+
+function mousePressed() {
+  if (gameState === "START") {
+    userStartAudio(); 
+    mic.start();
+    resetGame();
+  } else if (gameState === "GAME_OVER") {
+    resetGame();
+  }
+}
+
+function resetGame() {
+  player = new Player();
+  enemies = [];
+  score = 0;
+  lastThemeChangeScore = 0;
+  currentThemeName = "ice"; // Start fresh
+  theme = THEMES[currentThemeName];
+  gameState = "RUNNING";
+}
+</script>
+</body>
+</html>
