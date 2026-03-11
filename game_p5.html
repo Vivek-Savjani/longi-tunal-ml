@@ -57,7 +57,7 @@ let score = 0;
 let lastThemeChangeScore = 0;
 let spectrum = [];
 let ampHistory = [];
-const ampHistoryMax = 30;
+const ampHistoryMax = 15;
 const pitchLow = 150;
 const pitchHigh = 1200;
 
@@ -153,7 +153,8 @@ function draw() {
     }
 
     lastBeatTime = now;
-    speed = map(bpm, 60, 180, 8, 32, true) + sqrt(score);
+    if (controlMode === "KEYBOARD"){ speed = map(bpm, 60, 180, 8, 64, true) + sqrt(score);}
+    else if (controlMode === "POSE"){ speed = map(bpm, 60, 180, 8, 16, true) + sqrt(score);}
     spawnEnemy();
   }
 
@@ -489,16 +490,16 @@ function spawnEnemy() {
   let pitch = constrain(scale, 0.0, 1.0);
   
   let pitchTier = 0;
-  if (pitch > 0.66) pitchTier = 2; 
-  else if (pitch > 0.33) pitchTier = 1; 
+  if (pitch > 0.55) pitchTier = 2; 
+  else if (pitch > 0.45) pitchTier = 1; 
   else pitchTier = 0;
   
   // Find the quietest and loudest moments from our recent memory
   let localMin = Math.min(...ampHistory);
   let localMax = Math.max(...ampHistory);
   
-  if (localMax - localMin < 0.05) {
-    localMax = localMin + 0.05;
+  if (localMax - localMin < 0.001) {
+    localMax = localMin + 0.0005;
   }
 
   let level = amplitude.getLevel();
