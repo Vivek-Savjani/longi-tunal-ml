@@ -78,10 +78,10 @@ let scanLineY = 0;
 // --- Hand Tracking Globals ---
 let handVideo;
 let hands;
-let lastHandY = 0;
+let lastHandY = null; // Track the literal previous frame's Y position
 let handVelocity = 0;
-const STRUM_THRESHOLD = 0.05; // Sensitivity: lower = easier to strum
-const STRUM_COOLDOWN = 250;   // ms between strums to prevent double-firing
+const STRUM_THRESHOLD = 0.02; // Adjust this! Lower = less movement required per frame to trigger.
+const STRUM_COOLDOWN = 300;   // ms between strums to prevent double-firing
 let lastStrumTime = 0;
 
 function setup() {
@@ -100,7 +100,7 @@ function setup() {
     iceParticles.push({ x: random(width), y: random(height), speed: random(1, 3) });
   }
 
-  // Setup Audio (Starts listening on first interaction)
+  // Setup Audio
   mic = new p5.AudioIn();
   amplitude = new p5.Amplitude(0.4);
   amplitude.setInput(mic);
@@ -123,30 +123,22 @@ function draw() {
   }
   
   if (peakDetect.isDetected && gameState === "RUNNING") {
+    beatPulse = 1;
 
-  beatPulse = 1;
-
-  let now = millis();
-
-  if (lastBeatTime !== 0) {
-    let interval = now - lastBeatTime;
-    beatWindow.push(interval);
-    if (beatWindow.length > maxBeatWindowSize) {
-      beatWindow.shift();
+    let now = millis();
+    if (lastBeatTime !== 0) {
+      let interval = now - lastBeatTime;
+      beatWindow.push(interval);
+      if (beatWindow.length > maxBeatWindowSize) {
+        beatWindow.shift();
+      }
+      let avgInterval = beatWindow.reduce((a,b)=>a+b,0) / beatWindow.length;
+      bpm = 60000 / avgInterval;
     }
-    let avgInterval =
-      beatWindow.reduce((a,b)=>a+b,0) / beatWindow.length;
-    bpm = 60000 / avgInterval;
 
-  }
-
-  lastBeatTime = now;
-  speed = map(bpm, 60, 180, 8, 32, true) + sqrt(score);
-  //speed = speed * (width / 1000); 
-  //speed = clamp(speed,5)
-
-  spawnEnemy();
-
+    lastBeatTime = now;
+    speed = map(bpm, 60, 180, 8, 32, true) + sqrt(score);
+    spawnEnemy();
   }
 
   beatPulse *= 0.75;
@@ -161,14 +153,18 @@ function draw() {
   translate(width - 170, height - 130);
   image(handVideo, 0, 0, 160, 120);
   // Optional: Draw a line showing the current hand velocity
+  
+  // Draw visual indicator for frame-by-frame velocity
+  strokeWeight(3);
   stroke(255, 0, 0);
-  line(80, 60, 80, 60 + handVelocity * 500);
+  line(80, 60, 80, 60 + (handVelocity * 600)); 
+  
+  // Draw threshold markers
+  stroke(0, 255, 0);
+  line(70, 60 - (STRUM_THRESHOLD * 600), 90, 60 - (STRUM_THRESHOLD * 600));
+  line(70, 60 + (STRUM_THRESHOLD * 600), 90, 60 + (STRUM_THRESHOLD * 600));
   pop();
 }
-
-// --- Optimized Tracking Globals ---
-let handHistory = []; 
-const HISTORY_SIZE = 10; // Smaller history for faster response
 
 function initHandTracking() {
   // Use a smaller video feed to reduce CPU load
@@ -183,8 +179,8 @@ function initHandTracking() {
   hands.setOptions({
     maxNumHands: 1,
     modelComplexity: 0, 
-    minDetectionConfidence: 0.4,
-    minTrackingConfidence: 0.5
+    minDetectionConfidence: 0.4, 
+    minTrackingConfidence: 0.3
   });
 
   hands.onResults(onHandResults);
@@ -201,35 +197,33 @@ function initHandTracking() {
 
 function onHandResults(results) {
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-    let currentY = results.multiHandLandmarks[0][12].y; 
-    
-    // Maintain relative center
-    handHistory.push(currentY);
-    if (handHistory.length > HISTORY_SIZE) handHistory.shift();
-    let avgY = handHistory.reduce((a, b) => a + b, 0) / handHistory.length;
-    
+    let landmarks = results.multiHandLandmarks[0];
+    let currentY = (landmarks[0].y + landmarks[8].y) / 2; 
+    if (lastHandY === null) {
+      lastHandY = currentY; 
+    }
     handVelocity = currentY - lastHandY;
-    lastHandY = currentY;
-
+    lastHandY = currentY; // Save current position for the next frame
     let now = millis();
-    // Reduced cooldown to 150ms for faster consecutive strums
     if (now - lastStrumTime > STRUM_COOLDOWN && gameState === "RUNNING") {
-      
-      // UP STRUM: Velocity check + Relative Position check
-      if (handVelocity < -STRUM_THRESHOLD && currentY < avgY - 0.01) {
+      // UP STRUM
+      if (handVelocity < -STRUM_THRESHOLD) {
         if (player.currentLane > 0) {
           player.currentLane--;
           lastStrumTime = now;
         }
       } 
       // DOWN STRUM
-      else if (handVelocity > STRUM_THRESHOLD && currentY > avgY + 0.01) {
+      else if (handVelocity > STRUM_THRESHOLD) {
         if (player.currentLane < lanes - 1) {
           player.currentLane++;
           lastStrumTime = now;
         }
       }
     }
+  } else {
+    lastHandY = null;
+    handVelocity = 0;
   }
 }
 
@@ -329,7 +323,6 @@ function drawIceBg() {
 
 function drawSynthwaveBg() {
   background(theme.bg[0], theme.bg[1], theme.bg[2]);
-  
   let sunY = height * 0.95;
   let response = pow(smoothedPulse, 0.7);
   let coreR = 145 + response * 50;
@@ -374,7 +367,7 @@ class Player {
   update() {
     let targetY = laneCentres[this.currentLane];
     // Smooth glide to lane
-    this.y = lerp(this.y, targetY, 0.3);
+    this.y = lerp(this.y, targetY, 0.3); 
   }
   
   draw() {
@@ -382,7 +375,7 @@ class Player {
     noStroke();
     // Draw the Pygame Right-Facing Triangle: [(0,0), (50,25), (0,50)]
     push();
-    translate(this.x, this.y - 25); // Offset so y is center
+    translate(this.x, this.y - 25); 
     beginShape();
     vertex(0, 0);
     vertex(50, 25);
@@ -393,7 +386,6 @@ class Player {
 }
 
 function spawnEnemy() {
-
   let nyquist = sampleRate() / 2; // Usually 22050 Hz
   let lowBin = floor(map(PITCH_LOW, 0, nyquist, 0, spectrum.length));
   let highBin = floor(map(PITCH_HIGH, 0, nyquist, 0, spectrum.length));
@@ -416,9 +408,9 @@ function spawnEnemy() {
   let pitch = constrain(scale, 0.0, 1.0);
   
   let pitchTier = 0;
-  if (pitch > 0.66) pitchTier = 2; // High
-  else if (pitch > 0.33) pitchTier = 1; // Mid
-  else pitchTier = 0 //low
+  if (pitch > 0.66) pitchTier = 2; 
+  else if (pitch > 0.33) pitchTier = 1; 
+  else pitchTier = 0;
   
   // Find the quietest and loudest moments from our recent memory
   let localMin = Math.min(...ampHistory);
@@ -429,7 +421,6 @@ function spawnEnemy() {
   }
 
   let level = amplitude.getLevel();
-
   let targetLane = floor(map(level, localMin, localMax, lanes - 1, 0, true));
   
   enemies.push(new Enemy(targetLane, pitchTier));
@@ -451,7 +442,6 @@ class Enemy {
   }
   
   update(pulse) {
-
     this.x -= speed  //+ (pulse * 2); // Micro-stutter forward on beats
   }
   
@@ -475,7 +465,7 @@ function drawStartScreen() {
   fill(theme.lane_divider);
   textSize(30);
   text("Click or Press SPACE to Start", width/2, height/2);
-  text("UP/DOWN Arrows to Move", width/2, height/2 + 50);
+  text("UP/DOWN Arrows or SWIPE to Move", width/2, height/2 + 50);
 }
 
 function drawGameOver() {
