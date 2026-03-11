@@ -7,7 +7,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   
   <style>
@@ -75,14 +75,16 @@ let speed = 5;
 let iceParticles = [];
 let scanLineY = 0;
 
-// --- Hand Tracking Globals ---
-let handVideo;
-let hands;
-let lastHandY = null; // Track the literal previous frame's Y position
-let handVelocity = 0;
-const STRUM_THRESHOLD = 0.02; // Adjust this! Lower = less movement required per frame to trigger.
-const STRUM_COOLDOWN = 300;   // ms between strums to prevent double-firing
+// --- POSE Tracking Globals ---
+let camVideo;
+let pose;
+let lastWristY = null; 
+let wristVelocity = 0;
+const strum_thresh = 0.1; 
+const strum_cool = 150;
 let lastStrumTime = 0;
+let lastStrumDirection = 0;
+const rebound_cool = 1000;
 
 function setup() {
   //frameRate(60)
@@ -107,7 +109,7 @@ function setup() {
   fft = new p5.FFT(0.2, 128);
   fft.setInput(mic);
   peakDetect = new p5.PeakDetect(40, 200, 0.08);
-  initHandTracking();
+  initBodyTracking(); // Initialize the new Pose tracker
   player = new Player();
 }
 
@@ -149,81 +151,100 @@ function draw() {
   else if (gameState === "RUNNING") runGame();
   else if (gameState === "GAME_OVER") drawGameOver();
 
+  // Debug Camera View
   push();
   translate(width - 170, height - 130);
-  image(handVideo, 0, 0, 160, 120);
-  // Optional: Draw a line showing the current hand velocity
+  image(camVideo, 0, 0, 160, 120);
   
-  // Draw visual indicator for frame-by-frame velocity
+  // Draw visual indicator for wrist velocity
   strokeWeight(3);
   stroke(255, 0, 0);
-  line(80, 60, 80, 60 + (handVelocity * 600)); 
+  line(80, 60, 80, 60 + (wristVelocity * 600)); 
   
   // Draw threshold markers
   stroke(0, 255, 0);
-  line(70, 60 - (STRUM_THRESHOLD * 600), 90, 60 - (STRUM_THRESHOLD * 600));
-  line(70, 60 + (STRUM_THRESHOLD * 600), 90, 60 + (STRUM_THRESHOLD * 600));
+  line(70, 60 - (strum_thresh * 600), 90, 60 - (strum_thresh * 600));
+  line(70, 60 + (strum_thresh * 600), 90, 60 + (strum_thresh * 600));
   pop();
 }
 
-function initHandTracking() {
   // Use a smaller video feed to reduce CPU load
-  handVideo = createCapture(VIDEO);
-  handVideo.size(60, 60); 
-  handVideo.hide();
+let isPredicting = false; 
 
-  hands = new Hands({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+function initBodyTracking() {
+  camVideo = createCapture(VIDEO);
+  camVideo.size(80, 80); 
+  camVideo.hide();
+
+  pose = new Pose({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
   });
 
-  hands.setOptions({
-    maxNumHands: 1,
-    modelComplexity: 0, 
-    minDetectionConfidence: 0.4, 
-    minTrackingConfidence: 0.3
+  pose.setOptions({
+    modelComplexity:0,
+    smoothLandmarks: true,
+    minDetectionConfidence: 0.8, 
+    minTrackingConfidence: 0.7
   });
 
-  hands.onResults(onHandResults);
+  pose.onResults((results) => {
+    onPoseResults(results);
+    isPredicting = false;
+  });
 
-  const camera = new Camera(handVideo.elt, {
+  const camera = new Camera(camVideo.elt, {
     onFrame: async () => {
-      await hands.send({ image: handVideo.elt });
+      if (isPredicting) return; 
+      isPredicting = true;
+      await pose.send({ image: camVideo.elt });
     },
-    width: 60,
-    height: 60
+    width: 80,
+    height: 90
   });
   camera.start();
 }
 
-function onHandResults(results) {
-  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-    let landmarks = results.multiHandLandmarks[0];
-    let currentY = (landmarks[0].y + landmarks[8].y) / 2; 
-    if (lastHandY === null) {
-      lastHandY = currentY; 
-    }
-    handVelocity = currentY - lastHandY;
-    lastHandY = currentY; // Save current position for the next frame
-    let now = millis();
-    if (now - lastStrumTime > STRUM_COOLDOWN && gameState === "RUNNING") {
-      // UP STRUM
-      if (handVelocity < -STRUM_THRESHOLD) {
-        if (player.currentLane > 0) {
-          player.currentLane--;
-          lastStrumTime = now;
-        }
-      } 
-      // DOWN STRUM
-      else if (handVelocity > STRUM_THRESHOLD) {
-        if (player.currentLane < lanes - 1) {
-          player.currentLane++;
-          lastStrumTime = now;
+function onPoseResults(results) {
+  if (results.poseLandmarks) {
+    let targetWrist = results.poseLandmarks[16]; 
+
+    if (targetWrist && targetWrist.visibility > 0.5) {
+      let currentY = targetWrist.y;
+      
+      if (lastWristY === null) {
+        lastWristY = currentY; 
+      }
+
+      wristVelocity = currentY - lastWristY;
+      lastWristY = currentY; 
+
+      let now = millis();
+      if (now - lastStrumTime > strum_cool && gameState === "RUNNING") {
+        
+        // UP STRUM
+        if ((wristVelocity < -strum_thresh) && !(lastStrumDirection === -1 && (now - lastStrumTime < rebound_cool))) {
+          if (player.currentLane > 0) {
+            player.currentLane--;
+            lastStrumTime = now;
+            lastStrumDirection = 1;
+          }
+        } 
+        // DOWN STRUM
+        else if ((wristVelocity > strum_thresh) && !(lastStrumDirection === 1 && (now - lastStrumTime < rebound_cool))) {
+          if (player.currentLane < lanes - 1) {
+            player.currentLane++;
+            lastStrumTime = now;
+            lastStrumDirection = -1;
+          }
         }
       }
+    } else {
+      lastWristY = null;
+      wristVelocity = 0;
     }
   } else {
-    lastHandY = null;
-    handVelocity = 0;
+    lastWristY = null;
+    wristVelocity = 0;
   }
 }
 
