@@ -65,6 +65,8 @@ const lanes = 3;
 let laneHeight;
 let laneCentres = [];
 let trackPosition = 0;
+let poseCamera;
+let controlMode = "NONE";
 const themeNames = ["ice", "synthwave", "guitar"];
 
 // Audio
@@ -204,7 +206,7 @@ function initBodyTracking() {
     isPredicting = false;
   });
 
-  const camera = new Camera(camVideo.elt, {
+  poseCamera = new Camera(camVideo.elt, {
     onFrame: async () => {
       let now = millis();
       if (isPredicting || (now - lastPoseTime < poseInterval)) return; 
@@ -215,7 +217,7 @@ function initBodyTracking() {
     width: 80,
     height: 80
   });
-  camera.start();
+  poseCamera.start();
 }
 
 function onPoseResults(results) {
@@ -543,7 +545,7 @@ function drawStartScreen() {
   
   fill(theme.lane_divider);
   textSize(30);
-  text("Click or Press SPACE to Start", width/2, height/2);
+  text("Click to start with camera or Press SPACE to Start with keyboard", width/2, height/2);
   text("UP/DOWN Arrows or SWIPE to Move", width/2, height/2 + 50);
 }
 
@@ -560,25 +562,22 @@ function drawGameOver() {
   text(`Score: ${floor(score)}`, width/2, height/2);
   
   fill(theme.lane_divider);
-  text("Click or Press SPACE to restart", width/2, height/2 + 50);
+  text("Click to start with camera or Press SPACE to restart with keyboard", width/2, height/2 + 50);
 }
 
 // --- Input Handling ---
 function keyPressed() {
-  if (gameState === "START") {
+  if (gameState === "START" || gameState === "GAME_OVER") {
+    controlMode = "KEYBOARD";
     userStartAudio(); 
     mic.start();
-    resetGame();
-    return;
-  }
-  
-  if (gameState === "GAME_OVER") {
-    resetGame();
+    if (poseCamera) poseCamera.stop(); // Shutdown pose tracking
+    resetGame("ice"); // Default theme for keyboard
     return;
   }
 
-  // Handle Lane Movement
-  if (gameState === "RUNNING") {
+  // Handle Lane Movement (Only allow keyboard movement if in KEYBOARD mode)
+  if (gameState === "RUNNING" && controlMode === "KEYBOARD") {
     if ((keyCode === UP_ARROW || key === 'w' || key === 'W') && player.currentLane > 0) {
       player.currentLane--;
     } else if ((keyCode === DOWN_ARROW || key === 's' || key === 'S') && player.currentLane < lanes - 1) {
@@ -588,21 +587,22 @@ function keyPressed() {
 }
 
 function mousePressed() {
-  if (gameState === "START") {
+  if (gameState === "START" || gameState === "GAME_OVER") {
+    controlMode = "POSE";
     userStartAudio(); 
     mic.start();
-    resetGame();
-  } else if (gameState === "GAME_OVER") {
-    resetGame();
+    if (poseCamera) poseCamera.start(); // Ensure pose tracking is ON
+    resetGame("guitar"); // Default theme for mouse/pose
   }
 }
 
-function resetGame() {
+function resetGame(startingTheme) {
   player = new Player();
   enemies = [];
   score = 0;
+  trackPosition = 0;
   lastThemeChangeScore = 0;
-  currentThemeName = "ice"; // Start fresh
+  currentThemeName = startingTheme; // Use the theme passed by the input
   theme = THEMES[currentThemeName];
   gameState = "RUNNING";
 }
