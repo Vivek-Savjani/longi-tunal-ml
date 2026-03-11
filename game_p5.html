@@ -37,6 +37,15 @@ const THEMES = {
     bg: [5, 15, 40],
     bg_flash: [100, 200, 255],
     lane_divider: [180, 255, 255]
+  },
+  guitar: {
+    player: [255, 215, 0],
+    enemy_low: [139, 69, 19],
+    enemy_mid: [255, 140, 0],
+    enemy_high: [255, 69, 0],
+    bg: [30, 15, 5],
+    bg_flash: [60, 30, 10],      
+    lane_divider: [192, 192, 192]
   }
 };
 
@@ -48,14 +57,15 @@ let score = 0;
 let lastThemeChangeScore = 0;
 let spectrum = [];
 let ampHistory = [];
-const AMP_HISTORY_MAX = 30;
-const PITCH_LOW = 150;
-const PITCH_HIGH = 1500;
+const ampHistoryMax = 30;
+const pitchLow = 150;
+const pitchHigh = 1200;
 
 const lanes = 3;
 let laneHeight;
 let laneCentres = [];
-
+let trackPosition = 0;
+const themeNames = ["ice", "synthwave", "guitar"];
 
 // Audio
 let mic, fft, amplitude, peakDetect;
@@ -80,11 +90,13 @@ let camVideo;
 let pose;
 let lastWristY = null; 
 let wristVelocity = 0;
-const strum_thresh = 0.1; 
-const strum_cool = 150;
+const strumThresh = 0.05; 
+const strumCool = 150;
 let lastStrumTime = 0;
 let lastStrumDirection = 0;
-const rebound_cool = 1000;
+const reboundCool = 750;
+const poseInterval = 100;
+let lastPoseTime = 0;
 
 function setup() {
   //frameRate(60)
@@ -120,7 +132,7 @@ function draw() {
   let currentLevel = amplitude.getLevel();
   ampHistory.push(currentLevel);
 
-  if (ampHistory.length > AMP_HISTORY_MAX) {
+  if (ampHistory.length > ampHistoryMax) {
     ampHistory.shift();
   }
   
@@ -163,8 +175,8 @@ function draw() {
   
   // Draw threshold markers
   stroke(0, 255, 0);
-  line(70, 60 - (strum_thresh * 600), 90, 60 - (strum_thresh * 600));
-  line(70, 60 + (strum_thresh * 600), 90, 60 + (strum_thresh * 600));
+  line(70, 60 - (strumThresh * 600), 90, 60 - (strumThresh * 600));
+  line(70, 60 + (strumThresh * 600), 90, 60 + (strumThresh * 600));
   pop();
 }
 
@@ -194,12 +206,14 @@ function initBodyTracking() {
 
   const camera = new Camera(camVideo.elt, {
     onFrame: async () => {
-      if (isPredicting) return; 
+      let now = millis();
+      if (isPredicting || (now - lastPoseTime < poseInterval)) return; 
       isPredicting = true;
+      lastPoseTime = now;
       await pose.send({ image: camVideo.elt });
     },
     width: 80,
-    height: 90
+    height: 80
   });
   camera.start();
 }
@@ -219,10 +233,10 @@ function onPoseResults(results) {
       lastWristY = currentY; 
 
       let now = millis();
-      if (now - lastStrumTime > strum_cool && gameState === "RUNNING") {
+      if (now - lastStrumTime > strumCool && gameState === "RUNNING") {
         
         // UP STRUM
-        if ((wristVelocity < -strum_thresh) && !(lastStrumDirection === -1 && (now - lastStrumTime < rebound_cool))) {
+        if ((wristVelocity < -strumThresh) && !(lastStrumDirection === -1 && (now - lastStrumTime < reboundCool))) {
           if (player.currentLane > 0) {
             player.currentLane--;
             lastStrumTime = now;
@@ -230,7 +244,7 @@ function onPoseResults(results) {
           }
         } 
         // DOWN STRUM
-        else if ((wristVelocity > strum_thresh) && !(lastStrumDirection === 1 && (now - lastStrumTime < rebound_cool))) {
+        else if ((wristVelocity > strumThresh) && !(lastStrumDirection === 1 && (now - lastStrumTime < reboundCool))) {
           if (player.currentLane < lanes - 1) {
             player.currentLane++;
             lastStrumTime = now;
@@ -252,14 +266,17 @@ function onPoseResults(results) {
 function runGame() {
   // Check for theme swap
   if (floor(score) % 15 === 0 && floor(score) !== lastThemeChangeScore && floor(score) > 0) {
-    currentThemeName = currentThemeName === "ice" ? "synthwave" : "ice";
+    let availableThemes = themeNames.filter(t => t !== currentThemeName);
+    currentThemeName = random(availableThemes);
     theme = THEMES[currentThemeName];
     lastThemeChangeScore = floor(score);
   }
 
   // Draw Background
   if (currentThemeName === "synthwave") drawSynthwaveBg();
-  else drawIceBg();
+  else if (currentThemeName === "ice") drawIceBg();
+  else if (currentThemeName === "guitar") drawGuitarBg();
+
 
   // Draw Lanes
   stroke(theme.lane_divider[0], theme.lane_divider[1], theme.lane_divider[2], 80);
@@ -376,7 +393,48 @@ function drawSynthwaveBg() {
     line(0, y, width, y);
   }
 }
+function drawGuitarBg() {
+  background(theme.bg[0], theme.bg[1], theme.bg[2]);  
+  let response = pow(max(0, smoothedPulse), 0.7); // (Added max(0) safeguard here too just in case!)
+  noStroke();
+  fill(15, 5, 0, 150); 
 
+  trackPosition += speed * 0.5;
+  
+  // Frets
+  let fretSpacing = 250; 
+  let offset = trackPosition % fretSpacing; 
+  for (let x = width - offset + fretSpacing; x > -fretSpacing; x -= fretSpacing) {
+    let fretNum = Math.floor((trackPosition + width - x) / fretSpacing); 
+    noStroke();
+    fill(220, 220, 230, 60 + response * 40);
+    circle(x - fretSpacing/2, height/2, 40 + response * 15);
+    
+    // Metal fret wire
+    stroke(120, 120, 130, 150); 
+    strokeWeight(6);
+    line(x, 0, x, height);
+  } 
+  // Strings and Lane Highlights
+  for(let i = 0; i < lanes; i++) {
+    let y = laneCentres[i];
+    noStroke();
+    fill(theme.lane_divider[0], theme.lane_divider[1], theme.lane_divider[2], 15); 
+    rect(0, y - laneHeight/4, width, laneHeight/2); 
+    // String wave
+    stroke(theme.lane_divider[0], theme.lane_divider[1], theme.lane_divider[2], 180 + response * 75);
+    strokeWeight(3 + response * 4);
+    noFill();
+    beginShape();
+    for (let x = 0; x <= width + 20; x += 20) {
+      // Vibration
+      let amplitude = 3 + (response * 10); 
+      let wave = sin(x * 0.015 - frameCount * 0.2 + (i * 2)) * amplitude / 2;
+      vertex(x, y + wave);
+    }
+    endShape();
+  }
+}
 // --- Entities ---
 class Player {
   constructor() {
@@ -408,8 +466,8 @@ class Player {
 
 function spawnEnemy() {
   let nyquist = sampleRate() / 2; // Usually 22050 Hz
-  let lowBin = floor(map(PITCH_LOW, 0, nyquist, 0, spectrum.length));
-  let highBin = floor(map(PITCH_HIGH, 0, nyquist, 0, spectrum.length));
+  let lowBin = floor(map(pitchLow, 0, nyquist, 0, spectrum.length));
+  let highBin = floor(map(pitchHigh, 0, nyquist, 0, spectrum.length));
   
   let maxAmp = 0;
   let peakBin = lowBin;
@@ -425,7 +483,7 @@ function spawnEnemy() {
   let peakFreq = map(peakBin, 0, spectrum.length, 0, nyquist);
   
   // Scale it between 0.0 and 1.0, exactly like your Python script
-  let scale = (peakFreq - PITCH_LOW) / (PITCH_HIGH - PITCH_LOW);
+  let scale = (peakFreq - pitchLow) / (pitchHigh - pitchLow);
   let pitch = constrain(scale, 0.0, 1.0);
   
   let pitchTier = 0;
