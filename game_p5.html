@@ -38,11 +38,11 @@ const THEMES = {
     bg_flash: [100, 200, 255],
     lane_divider: [180, 255, 255]
   },
-  guitar: {
+guitar: {
     player: [255, 215, 0],
-    enemy_low: [139, 69, 19],
-    enemy_mid: [255, 140, 0],
-    enemy_high: [255, 69, 0],
+    enemy_low: [225, 175, 110],
+    enemy_mid: [245, 235, 215],
+    enemy_high: [190, 30, 30],
     bg: [30, 15, 5],
     bg_flash: [60, 30, 10],      
     lane_divider: [192, 192, 192]
@@ -53,6 +53,7 @@ const THEMES = {
 let gameState = "START"; // START, RUNNING, GAME_OVER
 let currentThemeName = "ice";
 let theme = THEMES[currentThemeName];
+let currentThemeObject; // Holds our active Theme class instance
 let score = 0;
 let lastThemeChangeScore = 0;
 let spectrum = [];
@@ -64,7 +65,6 @@ const pitchHigh = 1200;
 const lanes = 3;
 let laneHeight;
 let laneCentres = [];
-let trackPosition = 0;
 let poseCamera;
 let controlMode = "NONE";
 const themeNames = ["ice", "synthwave", "guitar"];
@@ -83,10 +83,6 @@ let player;
 let enemies = [];
 let speed = 5;
 
-// Background specific varsbpm
-let iceParticles = [];
-let scanLineY = 0;
-
 // --- POSE Tracking Globals ---
 let camVideo;
 let pose;
@@ -100,21 +96,292 @@ const reboundCool = 750;
 const poseInterval = 100;
 let lastPoseTime = 0;
 
+class Theme {
+  constructor(colors) { 
+    this.colors = colors;
+    this.trackPosition = speed;
+   }
+  
+  drawBackground(beatPulse, smoothedPulse) {}
+  drawPlayer(x, y) {}
+  drawEnemy(x, y, w, h, colorStr) {}
+}
+
+class SynthwaveTheme extends Theme {
+  constructor() {
+    super(THEMES.synthwave);
+    this.scanLineY = 0;
+  }
+
+  drawBackground(beatPulse, smoothedPulse) {
+    
+    this.trackPosition += speed * 0.5;
+
+    background(this.colors.bg[0], this.colors.bg[1], this.colors.bg[2]);
+    let sunY = height * 0.95;
+    let response = pow(max(0, smoothedPulse), 0.7);
+    let breath = sin(this.trackPosition * 0.01) * 10;
+    let coreR = 140 + breath + (response * 60);
+    
+    // Glow
+    noStroke();
+    fill(this.colors.player[0], this.colors.player[1], this.colors.player[2], 40);
+    let glowBreath = sin(this.trackPosition * 0.015) * 15;
+    circle(width/2, sunY, (coreR * 2.2) + glowBreath + (beatPulse * 20));
+
+    // Sun 
+    fill(this.colors.enemy_high);
+    circle(width/2, sunY, (coreR * 2.2) + glowBreath + (beatPulse * 20));
+  
+    
+    // Cut lines out of the sun
+    stroke(this.colors.bg);
+    for (let y = sunY - coreR; y < sunY + coreR; y += 20) {
+      let distFromTop = y - (sunY - coreR);
+      let lineWeight = map(distFromTop, 0, coreR * 2, 0, 15);
+      if (lineWeight > 1) {
+        strokeWeight(lineWeight);
+        line(width/2 - coreR, y, width/2 + coreR, y);
+      }
+    }
+
+    // Scanlines
+    this.scanLineY = (this.scanLineY + 1) % 8;
+    stroke(this.colors.enemy_low[0], this.colors.enemy_low[1], this.colors.enemy_low[2], 40);
+    strokeWeight(2);
+    for (let y = this.scanLineY; y < height; y += 8) {
+      line(0, y, width, y);
+    }
+  }
+  drawPlayer(x, y) {
+      push();
+      translate(x, y);
+      fill(this.colors.bg); // Hollow center
+      stroke(this.colors.player);
+      strokeWeight(3);
+      
+      beginShape();
+      vertex(0, -25);
+      vertex(50, 0);
+      vertex(0, 25);
+      vertex(15, 0); // Inner notch
+      endShape(CLOSE);
+      pop();
+    }
+
+  drawEnemy(x, y, w, h, colorStr) {
+    push();
+    translate(x, y);
+    let c = this.colors[colorStr];
+    fill(this.colors.bg[0], this.colors.bg[1], this.colors.bg[2], 240);
+    stroke(c[0], c[1], c[2]);
+    strokeWeight(3);
+    rect(0, 0, w, h, 4);
+    strokeWeight(1);
+    rect(10, 10, w - 20, h - 20, 2);
+    
+    pop();
+  }
+}
+
+class IceTheme extends Theme {
+  constructor() {
+    super(THEMES.ice);
+    this.iceParticles = [];
+    // Setup Ice Particles
+    for (let i = 0; i < 100; i++) {
+      this.iceParticles.push({ x: random(windowWidth || 1000), y: random(windowHeight || 800), speed: random(1, 3) });
+    }
+  }
+
+  drawBackground(beatPulse, smoothedPulse) {
+    background(this.colors.bg[0], this.colors.bg[1], this.colors.bg[2]);
+    
+    // Flash overlay
+    /*if (beatPulse > 0) {
+      fill(this.colors.bg_flash[0], this.colors.bg_flash[1], this.colors.bg_flash[2], beatPulse * 40);
+      rect(0, 0, width, height);
+    }*/
+    this.trackPosition += speed * 0.5;
+
+    // Particles
+    fill(this.colors.lane_divider);
+    noStroke();
+    for (let p of this.iceParticles) {
+      p.y += p.speed + beatPulse * 2;
+      p.x += sin(frameCount * 0.05 + p.x) * 0.5;
+      if (p.y > height) { p.y = 0; p.x = random(width); }
+      circle(p.x, p.y, 2);
+    }
+
+    // Stylized Snowflake in center
+    push();
+    translate(width / 2, height / 2);
+    rotate(this.trackPosition * 0.001);;
+    let response = pow(max(0, smoothedPulse), 0.7);
+    let breath = sin(this.trackPosition * 0.008) * 15;
+    let length = 70 + breath + (response * 90);
+    stroke(this.colors.lane_divider[0], this.colors.lane_divider[1], this.colors.lane_divider[2], 150);
+    
+    for (let i = 0; i < 6; i++) {
+      push();
+      rotate((TWO_PI / 6) * i);
+      strokeWeight(3);
+      line(0, 0, length, 0);
+      // Snowflake branches
+      strokeWeight(2);
+      let branchSpread = 0.2 + (sin(this.trackPosition * 0.02) * 0.05);
+      line(length * 0.6, 0, length * 0.8, length * branchSpread);
+      line(length * 0.6, 0, length * 0.8, -length * branchSpread);
+      line(length * 0.3, 0, length * 0.5, length * (branchSpread * 0.75));
+      line(length * 0.3, 0, length * 0.5, -length * (branchSpread * 0.75));
+      pop();
+    }
+    pop();
+  }
+
+drawPlayer(x, y) {
+    push();
+    translate(x, y);
+    fill(this.colors.player[0], this.colors.player[1], this.colors.player[2], 180);
+    stroke(255);
+    strokeWeight(2);
+    
+    beginShape();
+    vertex(50, 0);
+    vertex(15, 25);
+    vertex(0, 0);
+    vertex(15, -25); 
+    endShape(CLOSE);
+    pop();
+  }
+
+  drawEnemy(x, y, w, h, colorStr) {
+    push();
+    translate(x, y);
+    let c = this.colors[colorStr]; 
+    fill(c[0], c[1], c[2], 120);
+    stroke(c);
+    strokeWeight(2);
+    rect(0, 0, w, h, 4);
+    
+    stroke(255, 255, 255, 200);
+    strokeWeight(3);
+    line(2, 2, w - 2, 2);
+    pop();
+  }
+}
+
+class GuitarTheme extends Theme {
+  constructor() {
+    super(THEMES.guitar);
+  }
+
+  drawBackground(beatPulse, smoothedPulse) {
+    background(this.colors.bg[0], this.colors.bg[1], this.colors.bg[2]);  
+    let response = pow(max(0, smoothedPulse), 0.7);
+    noStroke();
+    fill(15, 5, 0, 150); 
+
+    this.trackPosition += speed * 0.5;
+    
+    // Frets
+    let fretSpacing = 250; 
+    let offset = this.trackPosition % fretSpacing; 
+    for (let x = width - offset + fretSpacing; x > -fretSpacing; x -= fretSpacing) {
+      let fretNum = Math.floor((this.trackPosition + width - x) / fretSpacing); 
+      noStroke();
+      fill(220, 220, 230, 60 + response * 40);
+      circle(x - fretSpacing/2, height/2, 40 + response * 15);
+      
+      // Metal fret wire
+      stroke(120, 120, 130, 150); 
+      strokeWeight(6);
+      line(x, 0, x, height);
+    } 
+    
+    // Strings and Lane Highlights
+    for(let i = 0; i < lanes; i++) {
+      let y = laneCentres[i];
+      noStroke();
+      fill(this.colors.lane_divider[0], this.colors.lane_divider[1], this.colors.lane_divider[2], 15); 
+      rect(0, y - laneHeight/4, width, laneHeight/2); 
+      // String wave
+      stroke(this.colors.lane_divider[0], this.colors.lane_divider[1], this.colors.lane_divider[2], 180 + response * 75);
+      strokeWeight(3 + response * 4);
+      noFill();
+      beginShape();
+      for (let x = 0; x <= width + 20; x += 20) {
+        // Vibration
+        let amplitude = 3 + (response * 10); 
+        let wave = sin(x * 0.015 - frameCount * 0.2 + (i * 2)) * amplitude / 2;
+        vertex(x, y + wave);
+      }
+      endShape();
+    }
+  }
+
+  drawPlayer(x, y) {
+    push();
+    translate(x, y);
+    fill(this.colors.player);
+    stroke(255, 255, 255, 150);
+    strokeWeight(2);
+    beginShape();
+    vertex(50, 0); 
+    bezierVertex(40, 20, 20, 25, 0, 25); 
+    bezierVertex(-10, 15, -10, -15, 0, -25); 
+    bezierVertex(20, -25, 40, -20, 50, 0); 
+    endShape(CLOSE);
+    pop();
+  }
+  drawEnemy(x, y, w, h, colorStr) {
+    push();
+    translate(x, y);
+    // Amp Cab
+    let c = this.colors[colorStr];
+    fill(c[0], c[1], c[2], 200);
+    stroke(c);
+    //stroke(255, 255, 255);
+    strokeWeight(4);
+    rect(0, 0, w, h, 5);
+    
+    // Speaker Cones
+    let numSpeakers = floor(w / 60) || 1;
+    let spkSpacing = w / numSpeakers;
+    noStroke();
+    
+    for(let i = 0; i < numSpeakers; i++) {
+      let centerX = (i * spkSpacing) + (spkSpacing / 2);
+      let centerY = h / 2;
+      
+      fill(40); // Outer speaker rim
+      circle(centerX, centerY, min(spkSpacing * 0.75, h * 0.75));
+      fill(15); // Inner speaker cone
+      circle(centerX, centerY, min(spkSpacing * 0.3, h * 0.3));
+    }
+    pop();
+  }
+}
+
+function activateTheme(themeName) {
+  currentThemeName = themeName;
+  theme = THEMES[currentThemeName];
+  if (themeName === "synthwave") currentThemeObject = new SynthwaveTheme();
+  else if (themeName === "ice") currentThemeObject = new IceTheme();
+  else if (themeName === "guitar") currentThemeObject = new GuitarTheme();
+}
+
 function setup() {
-  //frameRate(60)
   createCanvas(windowWidth, windowHeight);
   textFont('Consolas');
 
   laneHeight = windowHeight / lanes;
-  
   for (let i = 0; i < lanes; i++) {
     laneCentres.push((i * laneHeight) + (laneHeight / 2));
   }
   
-  // Setup Ice Particles
-  for (let i = 0; i < 100; i++) {
-    iceParticles.push({ x: random(width), y: random(height), speed: random(1, 3) });
-  }
+  activateTheme(currentThemeName);
 
   // Setup Audio
   mic = new p5.AudioIn();
@@ -153,7 +420,7 @@ function draw() {
     }
 
     lastBeatTime = now;
-    if (controlMode === "KEYBOARD"){ speed = map(bpm, 60, 180, 8, 64, true) + sqrt(score);}
+    if (controlMode === "KEYBOARD"){ speed = map(bpm, 60, 180, 8, 32, true) + (score * 0.4);}
     else if (controlMode === "POSE"){ speed = map(bpm, 60, 180, 8, 16, true) + sqrt(score);}
     spawnEnemy();
   }
@@ -183,7 +450,7 @@ function draw() {
   pop();
 }
 
-  // Use a smaller video feed to reduce CPU load
+// Use a smaller video feed to reduce CPU load
 let isPredicting = false; 
 
 function initBodyTracking() {
@@ -270,16 +537,12 @@ function runGame() {
   // Check for theme swap
   if (floor(score) % 15 === 0 && floor(score) !== lastThemeChangeScore && floor(score) > 0) {
     let availableThemes = themeNames.filter(t => t !== currentThemeName);
-    currentThemeName = random(availableThemes);
-    theme = THEMES[currentThemeName];
+    activateTheme(random(availableThemes));
     lastThemeChangeScore = floor(score);
   }
 
-  // Draw Background
-  if (currentThemeName === "synthwave") drawSynthwaveBg();
-  else if (currentThemeName === "ice") drawIceBg();
-  else if (currentThemeName === "guitar") drawGuitarBg();
-
+  // Draw Background using current Theme
+  currentThemeObject.drawBackground(beatPulse, smoothedPulse);
 
   // Draw Lanes
   stroke(theme.lane_divider[0], theme.lane_divider[1], theme.lane_divider[2], 80);
@@ -318,126 +581,6 @@ function runGame() {
   text(`Score: ${floor(score)}`, width - 20, 20);
 }
 
-// --- Background Renderers ---
-function drawIceBg() {
-  background(theme.bg[0], theme.bg[1], theme.bg[2]);
-  
-  // Flash overlay
-  /*if (beatPulse > 0) {
-    fill(theme.bg_flash[0], theme.bg_flash[1], theme.bg_flash[2], beatPulse * 40);
-    rect(0, 0, width, height);
-  }*/
-
-  // Particles
-  fill(theme.lane_divider);
-  noStroke();
-  for (let p of iceParticles) {
-    p.y += p.speed + beatPulse * 2;
-    p.x += sin(frameCount * 0.05 + p.x) * 0.5;
-    if (p.y > height) { p.y = 0; p.x = random(width); }
-    circle(p.x, p.y, 2);
-  }
-
-  // Stylized Snowflake in center
-  push();
-  translate(width / 2, height / 2);
-  rotate(frameCount * 0.005);
-  let response = pow(smoothedPulse, 0.7);
-  let length = 70 + response * 90;
-  stroke(theme.lane_divider[0], theme.lane_divider[1], theme.lane_divider[2], 150);
-  
-  for (let i = 0; i < 6; i++) {
-    push();
-    rotate((TWO_PI / 6) * i);
-    strokeWeight(3);
-    line(0, 0, length, 0);
-    // Snowflake branches
-    strokeWeight(2);
-    line(length * 0.6, 0, length * 0.8, length * 0.2);
-    line(length * 0.6, 0, length * 0.8, -length * 0.2);
-    line(length * 0.3, 0, length * 0.5, length * 0.15);
-    line(length * 0.3, 0, length * 0.5, -length * 0.15);
-    pop();
-  }
-  pop();
-}
-
-function drawSynthwaveBg() {
-  background(theme.bg[0], theme.bg[1], theme.bg[2]);
-  let sunY = height * 0.95;
-  let response = pow(smoothedPulse, 0.7);
-  let coreR = 145 + response * 50;
-  
-  // Glow
-  noStroke();
-  fill(theme.player[0], theme.player[1], theme.player[2], 40);
-  circle(width/2, sunY, (coreR + beatPulse * 20) * 2.2);
-
-  // Retro Sun (Draw circle, slice with black lines)
-  fill(theme.enemy_high);
-  circle(width/2, sunY, coreR * 2);
-  
-  // Cut lines out of the sun
-  stroke(theme.bg);
-  for (let y = sunY - coreR; y < sunY + coreR; y += 20) {
-    let distFromTop = y - (sunY - coreR);
-    let lineWeight = map(distFromTop, 0, coreR * 2, 0, 15);
-    if (lineWeight > 1) {
-      strokeWeight(lineWeight);
-      line(width/2 - coreR, y, width/2 + coreR, y);
-    }
-  }
-
-  // Scanlines
-  scanLineY = (scanLineY + 1) % 8;
-  stroke(theme.enemy_low[0], theme.enemy_low[1], theme.enemy_low[2], 40);
-  strokeWeight(2);
-  for (let y = scanLineY; y < height; y += 8) {
-    line(0, y, width, y);
-  }
-}
-function drawGuitarBg() {
-  background(theme.bg[0], theme.bg[1], theme.bg[2]);  
-  let response = pow(max(0, smoothedPulse), 0.7); // (Added max(0) safeguard here too just in case!)
-  noStroke();
-  fill(15, 5, 0, 150); 
-
-  trackPosition += speed * 0.5;
-  
-  // Frets
-  let fretSpacing = 250; 
-  let offset = trackPosition % fretSpacing; 
-  for (let x = width - offset + fretSpacing; x > -fretSpacing; x -= fretSpacing) {
-    let fretNum = Math.floor((trackPosition + width - x) / fretSpacing); 
-    noStroke();
-    fill(220, 220, 230, 60 + response * 40);
-    circle(x - fretSpacing/2, height/2, 40 + response * 15);
-    
-    // Metal fret wire
-    stroke(120, 120, 130, 150); 
-    strokeWeight(6);
-    line(x, 0, x, height);
-  } 
-  // Strings and Lane Highlights
-  for(let i = 0; i < lanes; i++) {
-    let y = laneCentres[i];
-    noStroke();
-    fill(theme.lane_divider[0], theme.lane_divider[1], theme.lane_divider[2], 15); 
-    rect(0, y - laneHeight/4, width, laneHeight/2); 
-    // String wave
-    stroke(theme.lane_divider[0], theme.lane_divider[1], theme.lane_divider[2], 180 + response * 75);
-    strokeWeight(3 + response * 4);
-    noFill();
-    beginShape();
-    for (let x = 0; x <= width + 20; x += 20) {
-      // Vibration
-      let amplitude = 3 + (response * 10); 
-      let wave = sin(x * 0.015 - frameCount * 0.2 + (i * 2)) * amplitude / 2;
-      vertex(x, y + wave);
-    }
-    endShape();
-  }
-}
 // --- Entities ---
 class Player {
   constructor() {
@@ -453,17 +596,8 @@ class Player {
   }
   
   draw() {
-    fill(theme.player);
-    noStroke();
-    // Draw the Pygame Right-Facing Triangle: [(0,0), (50,25), (0,50)]
-    push();
-    translate(this.x, this.y - 25); 
-    beginShape();
-    vertex(0, 0);
-    vertex(50, 25);
-    vertex(0, 50);
-    endShape(CLOSE);
-    pop();
+    // Delegate to the current theme
+    currentThemeObject.drawPlayer(this.x, this.y);
   }
 }
 
@@ -485,7 +619,7 @@ function spawnEnemy() {
   // Convert that bin back into a frequency number
   let peakFreq = map(peakBin, 0, spectrum.length, 0, nyquist);
   
-  // Scale it between 0.0 and 1.0, exactly like your Python script
+  // Scale it between 0.0 and 1.0
   let scale = (peakFreq - pitchLow) / (pitchHigh - pitchLow);
   let pitch = constrain(scale, 0.0, 1.0);
   
@@ -494,7 +628,7 @@ function spawnEnemy() {
   else if (pitch > 0.45) pitchTier = 1; 
   else pitchTier = 0;
   
-  // Find the quietest and loudest moments from our recent memory
+  // Find the quietest and loudest moments from recent memory
   let localMin = Math.min(...ampHistory);
   let localMax = Math.max(...ampHistory);
   
@@ -524,14 +658,12 @@ class Enemy {
   }
   
   update(pulse) {
-    this.x -= speed  //+ (pulse * 2); // Micro-stutter forward on beats
+    this.x -= speed;
   }
   
   draw() {
-    let c = theme[this.colorStr];
-    fill(c[0], c[1], c[2]);
-    noStroke();
-    rect(this.x, this.y, this.w, this.h, 10); // border_radius = 10
+    // Delegate to the current theme
+    currentThemeObject.drawEnemy(this.x, this.y, this.w, this.h, this.colorStr);
   }
 }
 
@@ -601,10 +733,8 @@ function resetGame(startingTheme) {
   player = new Player();
   enemies = [];
   score = 0;
-  trackPosition = 0;
   lastThemeChangeScore = 0;
-  currentThemeName = startingTheme; // Use the theme passed by the input
-  theme = THEMES[currentThemeName];
+  activateTheme(startingTheme); // Safely sets up theme object + variables
   gameState = "RUNNING";
 }
 </script>
