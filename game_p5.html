@@ -49,23 +49,16 @@ guitar: {
   }
 };
 
-// --- Globals ---
+// Globals
 let gameState = "START"; // START, RUNNING, GAME_OVER
 let currentThemeName = "ice";
 let theme = THEMES[currentThemeName];
 let currentThemeObject; // Holds our active Theme class instance
 let score = 0;
 let lastThemeChangeScore = 0;
-let spectrum = [];
-let ampHistory = [];
-const ampHistoryMax = 15;
-const pitchLow = 150;
-const pitchHigh = 1200;
-
 const lanes = 3;
 let laneHeight;
 let laneCentres = [];
-let poseCamera;
 let controlMode = "NONE";
 const themeNames = ["ice", "synthwave", "guitar"];
 
@@ -77,13 +70,18 @@ let beatWindow = [];
 let maxBeatWindowSize = 8;
 let lastBeatTime = 0;
 let bpm = 10;
+let spectrum = [];
+let ampHistory = [];
+const ampHistoryMax = 15;
+const pitchLow = 150;
+const pitchHigh = 1200;
 
 // Game Entities
 let player;
 let enemies = [];
 let speed = 5;
 
-// --- POSE Tracking Globals ---
+// POSE
 let camVideo;
 let pose;
 let lastWristY = null; 
@@ -95,6 +93,10 @@ let lastStrumDirection = 0;
 const reboundCool = 750;
 const poseInterval = 100;
 let lastPoseTime = 0;
+
+// SHHHH
+let zenMode = false;
+let inputBuffer = "";
 
 class Theme {
   constructor(colors) { 
@@ -431,6 +433,10 @@ function draw() {
     lastBeatTime = now;
     if (controlMode === "KEYBOARD"){ speed = map(bpm, 60, 180, 8, 32, true) + (score * 0.4);}
     else if (controlMode === "POSE"){ speed = map(bpm, 60, 180, 8, 16, true) + sqrt(score);}
+    else if (zenMode){
+        let beatDurationFrames = (60 / bpm) * 60; // seconds * 60fps
+        speed = width / (beatDurationFrames / 4); // 4/4 time
+      }
     spawnEnemy();
   }
 
@@ -565,14 +571,15 @@ function runGame() {
     e.draw();
     
     // AABB Collision with Player's triangle bounds
+    
     if (e.x < player.x + 50 && e.x + e.w > player.x &&
         e.y < player.y + 25 && e.y + e.h > player.y - 25) {
-      gameState = "GAME_OVER";
-    }
+        if (!zenMode) {gameState = "GAME_OVER";}
+      }
     
     if (e.x + e.w < 0) {
-      enemies.splice(i, 1);
-      score += 1; // Gain score for surviving
+          enemies.splice(i, 1);
+          score += 1; // Gain score for surviving
     }
   }
 
@@ -705,7 +712,7 @@ function drawGameOver() {
 function keyPressed() {
   inputBuffer += key.toUpperCase();
   if (inputBuffer.length > 10) inputBuffer = inputBuffer.substring(1);
-  
+
   if (inputBuffer.includes("ZEN")) {
     zenMode = !zenMode;
     inputBuffer = ""; 
