@@ -730,10 +730,10 @@ function drawStartScreen() {
 }
 
 function drawGameOver() {
-  background(0, 200);
-  
+  background(0, 10);
   textAlign(CENTER, CENTER);
-  fill(theme.enemy_high);
+  
+  fill(THEMES.guitar.enemy_high);
   textSize(64);
   text("Game Over!!!", width/2, height/3);
 
@@ -752,7 +752,7 @@ function drawGameOver() {
   if (score > 50) rank = "2f  (Second harmonic)";
   if (score > 200) rank = "f (Fundemental frequency)";
   
-  fill(theme.player);
+  fill(THEMES.guitar.player);;
   textSize(32);
   text("Rank: " + rank, width/2, height/2 + 60);
 
