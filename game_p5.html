@@ -100,6 +100,7 @@ class Theme {
   constructor(colors) { 
     this.colors = colors;
     this.trackPosition = speed;
+    this.scanLineY = 0;
    }
   
   drawBackground(beatPulse, smoothedPulse) {}
@@ -110,30 +111,32 @@ class Theme {
 class SynthwaveTheme extends Theme {
   constructor() {
     super(THEMES.synthwave);
-    this.scanLineY = 0;
+    this.visualResponse = 0;
   }
-
-  drawBackground(beatPulse, smoothedPulse) {
     
+  drawBackground(beatPulse, smoothedPulse) {
     this.trackPosition += speed * 0.5;
+
+    // Smooth the response transition (0.1 = slower/smoother)
+    let targetResponse = pow(max(0, smoothedPulse), 0.7);
+    this.visualResponse = lerp(this.visualResponse, targetResponse, 0.1);
 
     background(this.colors.bg[0], this.colors.bg[1], this.colors.bg[2]);
     let sunY = height * 0.95;
-    let response = pow(max(0, smoothedPulse), 0.7);
-    let breath = sin(this.trackPosition * 0.01) * 10;
-    let coreR = 140 + breath + (response * 60);
+    
+    // Slower frequency (0.005) and reduced expansion (25)
+    let breath = sin(this.trackPosition * 0.005) * 5; 
+    let coreR = 145 + breath + (this.visualResponse * 25);
     
     // Glow
     noStroke();
-    fill(this.colors.player[0], this.colors.player[1], this.colors.player[2], 40);
-    let glowBreath = sin(this.trackPosition * 0.015) * 15;
-    circle(width/2, sunY, (coreR * 2.2) + glowBreath + (beatPulse * 20));
-
-    // Sun 
-    fill(this.colors.enemy_high);
-    circle(width/2, sunY, (coreR * 2.2) + glowBreath + (beatPulse * 20));
+    fill(this.colors.player[0],this.colors.player[1],this.colors.player[2], 40);
+    circle(width/2, sunY, (coreR + beatPulse * 20) * 2.2);
+   
+    // Core
+    fill(this.colors.enemy_high[0],this.colors.enemy_high[1],this.colors.enemy_high[2]);
+    circle(width/2, sunY, coreR * 2);
   
-    
     // Cut lines out of the sun
     stroke(this.colors.bg);
     for (let y = sunY - coreR; y < sunY + coreR; y += 20) {
@@ -147,27 +150,28 @@ class SynthwaveTheme extends Theme {
 
     // Scanlines
     this.scanLineY = (this.scanLineY + 1) % 8;
-    stroke(this.colors.enemy_low[0], this.colors.enemy_low[1], this.colors.enemy_low[2], 40);
+    stroke(theme.enemy_low[0], theme.enemy_low[1], theme.enemy_low[2], 40);
     strokeWeight(2);
     for (let y = this.scanLineY; y < height; y += 8) {
       line(0, y, width, y);
-    }
   }
+  }
+
   drawPlayer(x, y) {
-      push();
-      translate(x, y);
-      fill(this.colors.bg); // Hollow center
-      stroke(this.colors.player);
-      strokeWeight(3);
-      
-      beginShape();
-      vertex(0, -25);
-      vertex(50, 0);
-      vertex(0, 25);
-      vertex(15, 0); // Inner notch
-      endShape(CLOSE);
-      pop();
-    }
+    push();
+    translate(x, y);
+    fill(this.colors.bg); // Hollow center
+    stroke(this.colors.player);
+    strokeWeight(3);
+    
+    beginShape();
+    vertex(0, -25);
+    vertex(50, 0);
+    vertex(0, 25);
+    vertex(15, 0); // Inner notch
+    endShape(CLOSE);
+    pop();
+  }
 
   drawEnemy(x, y, w, h, colorStr) {
     push();
@@ -179,7 +183,6 @@ class SynthwaveTheme extends Theme {
     rect(0, 0, w, h, 4);
     strokeWeight(1);
     rect(10, 10, w - 20, h - 20, 2);
-    
     pop();
   }
 }
@@ -187,6 +190,7 @@ class SynthwaveTheme extends Theme {
 class IceTheme extends Theme {
   constructor() {
     super(THEMES.ice);
+    this.visualResponse = 0;
     this.iceParticles = [];
     // Setup Ice Particles
     for (let i = 0; i < 100; i++) {
@@ -204,12 +208,16 @@ class IceTheme extends Theme {
     }*/
     this.trackPosition += speed * 0.5;
 
+    // Smooth the response transition
+    let targetResponse = pow(max(0, smoothedPulse), 0.7);
+    this.visualResponse = lerp(this.visualResponse, targetResponse, 0.1);
+
     // Particles
     fill(this.colors.lane_divider);
     noStroke();
     for (let p of this.iceParticles) {
       p.y += p.speed + beatPulse * 2;
-      p.x += sin(frameCount * 0.05 + p.x) * 0.5;
+      p.x += sin(this.trackPosition * 0.01 + p.x) * 0.5;
       if (p.y > height) { p.y = 0; p.x = random(width); }
       circle(p.x, p.y, 2);
     }
@@ -217,10 +225,10 @@ class IceTheme extends Theme {
     // Stylized Snowflake in center
     push();
     translate(width / 2, height / 2);
-    rotate(this.trackPosition * 0.001);;
-    let response = pow(max(0, smoothedPulse), 0.7);
-    let breath = sin(this.trackPosition * 0.008) * 15;
-    let length = 70 + breath + (response * 90);
+    rotate(this.trackPosition * 0.0005); // Slower rotation
+    
+    let breath = sin(this.trackPosition * 0.005) * 8;
+    let length = 75 + breath + (this.visualResponse * 50);
     stroke(this.colors.lane_divider[0], this.colors.lane_divider[1], this.colors.lane_divider[2], 150);
     
     for (let i = 0; i < 6; i++) {
@@ -230,7 +238,7 @@ class IceTheme extends Theme {
       line(0, 0, length, 0);
       // Snowflake branches
       strokeWeight(2);
-      let branchSpread = 0.2 + (sin(this.trackPosition * 0.02) * 0.05);
+      let branchSpread = 0.2 + (sin(this.trackPosition * 0.01) * 0.03);
       line(length * 0.6, 0, length * 0.8, length * branchSpread);
       line(length * 0.6, 0, length * 0.8, -length * branchSpread);
       line(length * 0.3, 0, length * 0.5, length * (branchSpread * 0.75));
@@ -240,7 +248,7 @@ class IceTheme extends Theme {
     pop();
   }
 
-drawPlayer(x, y) {
+  drawPlayer(x, y) {
     push();
     translate(x, y);
     fill(this.colors.player[0], this.colors.player[1], this.colors.player[2], 180);
@@ -265,6 +273,7 @@ drawPlayer(x, y) {
     strokeWeight(2);
     rect(0, 0, w, h, 4);
     
+    // Bright white edge on top to look like a glossy ice cube
     stroke(255, 255, 255, 200);
     strokeWeight(3);
     line(2, 2, w - 2, 2);
@@ -375,7 +384,7 @@ function activateTheme(themeName) {
 function setup() {
   createCanvas(windowWidth, windowHeight);
   textFont('Consolas');
-
+  frameRate(60);
   laneHeight = windowHeight / lanes;
   for (let i = 0; i < lanes; i++) {
     laneCentres.push((i * laneHeight) + (laneHeight / 2));
