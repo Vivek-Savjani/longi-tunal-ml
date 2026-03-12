@@ -460,11 +460,10 @@ function draw() {
 }
 
 // Use a smaller video feed to reduce CPU load
-let isPredicting = false; 
-
-function initBodyTracking() {
+let isPoseProcessing = false; 
+async function initBodyTracking() {
   camVideo = createCapture(VIDEO);
-  camVideo.size(80, 80); 
+  camVideo.size(80, 80); // Higher res for better tracking, still low CPU
   camVideo.hide();
 
   pose = new Pose({
@@ -472,54 +471,51 @@ function initBodyTracking() {
   });
 
   pose.setOptions({
-    modelComplexity:0,
+    modelComplexity: 0,
     smoothLandmarks: true,
-    minDetectionConfidence: 0.8, 
-    minTrackingConfidence: 0.7
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
   });
 
-  pose.onResults((results) => {
-    onPoseResults(results);
-    isPredicting = false;
-  });
+  pose.onResults(onPoseResults);
 
-  poseCamera = new Camera(camVideo.elt, {
-    onFrame: async () => {
-      let now = millis();
-      if (isPredicting || (now - lastPoseTime < poseInterval)) return; 
-      isPredicting = true;
-      lastPoseTime = now;
-      await pose.send({ image: camVideo.elt });
-    },
-    width: 80,
-    height: 80
-  });
-  poseCamera.start();
+
+  const runDetection = async () => {
+    let now = millis();
+    if (gameState === "RUNNING" && controlMode === "POSE"&& !isPoseProcessing && now - lastPoseTime > poseInterval) {
+      if (now - lastPoseTime > poseInterval) {
+        if (camVideo.elt.readyState === 4) {
+          isPoseProcessing = true; 
+          lastPoseTime = now;
+          await pose.send({ image: camVideo.elt });
+        }
+      }
+    }
+    requestAnimationFrame(runDetection);
+  };
+  runDetection();
 }
 
 function onPoseResults(results) {
-  if (results.poseLandmarks) {
-    let targetWrist = results.poseLandmarks[16]; 
+  if (!results.poseLandmarks) return;
+  isPoseProcessing = false;
+  let rightWrist = results.poseLandmarks[16];
 
-    if (targetWrist && targetWrist.visibility > 0.5) {
-      let currentY = targetWrist.y;
-      
-      if (lastWristY === null) {
-        lastWristY = currentY; 
-      }
-
+  if (rightWrist && rightWrist.visibility > 0.6) {
+    let currentY = rightWrist.y;
+    
+    if (lastWristY !== null) {
       wristVelocity = currentY - lastWristY;
-      lastWristY = currentY; 
-
       let now = millis();
-      if (now - lastStrumTime > strumCool && gameState === "RUNNING") {
+
+      if (now - lastStrumTime > strumCool) {
         
         // UP STRUM
-        if ((wristVelocity < -strumThresh) && !(lastStrumDirection === -1 && (now - lastStrumTime < reboundCool))) {
+         if ((wristVelocity < -strumThresh) && !(lastStrumDirection === -1 && (now - lastStrumTime < reboundCool))) {
           if (player.currentLane > 0) {
             player.currentLane--;
             lastStrumTime = now;
-            lastStrumDirection = 1;
+            lastStrumDirection = 1; 
           }
         } 
         // DOWN STRUM
@@ -531,17 +527,15 @@ function onPoseResults(results) {
           }
         }
       }
-    } else {
-      lastWristY = null;
-      wristVelocity = 0;
     }
+    lastWristY = currentY; 
   } else {
+    // Reset if we lose sight of the wrist to prevent "jumpy" movement
     lastWristY = null;
     wristVelocity = 0;
   }
 }
 
-// --- Main Game Loop ---
 function runGame() {
   // Check for theme swap
   if (floor(score) % 15 === 0 && floor(score) !== lastThemeChangeScore && floor(score) > 0) {
@@ -709,11 +703,17 @@ function drawGameOver() {
 
 // --- Input Handling ---
 function keyPressed() {
+  inputBuffer += key.toUpperCase();
+  if (inputBuffer.length > 10) inputBuffer = inputBuffer.substring(1);
+  
+  if (inputBuffer.includes("ZEN")) {
+    zenMode = !zenMode;
+    inputBuffer = ""; 
+  }
   if (gameState === "START" || gameState === "GAME_OVER") {
     controlMode = "KEYBOARD";
     userStartAudio(); 
     mic.start();
-    if (poseCamera) poseCamera.stop(); // Shutdown pose tracking
     resetGame("ice"); // Default theme for keyboard
     return;
   }
@@ -733,7 +733,6 @@ function mousePressed() {
     controlMode = "POSE";
     userStartAudio(); 
     mic.start();
-    if (poseCamera) poseCamera.start(); // Ensure pose tracking is ON
     resetGame("guitar"); // Default theme for mouse/pose
   }
 }
