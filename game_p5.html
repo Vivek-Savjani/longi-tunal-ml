@@ -469,7 +469,7 @@ function draw() {
 let isPoseProcessing = false; 
 async function initBodyTracking() {
   camVideo = createCapture(VIDEO);
-  camVideo.size(80, 80); // Higher res for better tracking, still low CPU
+  camVideo.size(80, 80);
   camVideo.hide();
 
   pose = new Pose({
@@ -536,7 +536,7 @@ function onPoseResults(results) {
     }
     lastWristY = currentY; 
   } else {
-    // Reset if we lose sight of the wrist to prevent "jumpy" movement
+    // Reset if wrist lost
     lastWristY = null;
     wristVelocity = 0;
   }
@@ -570,7 +570,7 @@ function runGame() {
     e.update(beatPulse);
     e.draw();
     
-    // AABB Collision with Player's triangle bounds
+    // AABB Collision
     
     if (e.x < player.x + 50 && e.x + e.w > player.x &&
         e.y < player.y + 25 && e.y + e.h > player.y - 25) {
@@ -591,7 +591,7 @@ function runGame() {
   text(`Score: ${floor(score)}`, width - 20, 20);
 }
 
-// --- Entities ---
+// Entities
 class Player {
   constructor() {
     this.x = 100;
@@ -677,38 +677,91 @@ class Enemy {
   }
 }
 
-// --- Game States ---
+// Game States
 function drawStartScreen() {
-  background(theme.bg);
+  background(theme.bg[0] * 0.4, theme.bg[1] * 0.4, theme.bg[2] * 0.4);
+  // background pattern
+  stroke(255, 15);
+  strokeWeight(1);
+  for(let i = 0; i < height; i += 10) line(0, i, width, i);
+  
   textAlign(CENTER, CENTER);
   
-  fill(theme.player);
-  textSize(72);
-  text("LONGI - TUNAL", width/2, height/3);
-  
+  // Title
+  fill(theme.player[0], theme.player[1], theme.player[2], 80);
+  textSize(80);
+  text("LONGI-TUNAL", width/2 + 4, height/4 + 4);
+  fill(255);
+  text("LONGI-TUNAL", width/2, height/4);
+
+  // Instructions
+  fill(0, 210); // Slightly adjusted transparency
+  stroke(theme.lane_divider);
+  strokeWeight(2);
+  rect(width/2 - 345, height/2 - 140, 690, 330, 15);
+  // Header
   fill(theme.lane_divider);
-  textSize(30);
-  text("Click to start with camera or Press SPACE to Start with keyboard", width/2, height/2);
-  text("UP/DOWN Arrows or SWIPE to Move", width/2, height/2 + 50);
+  noStroke();
+  textSize(24);
+  text("Instructions:", width/2, height/2 - 100);
+  
+  // Start Mic plz
+  fill(255, 255, 100); 
+  textSize(18);
+  textAlign(CENTER, TOP);
+  text("Notice: This game reacts to audio\n", width/2, height/2 - 55);
+  textSize(16);
+  text("Please link the game to a system audio loopback (or your mic if this isn't an option) and play some music.", width/2 - 300, height/2 - 30, 600, 100);
+
+  // Control Instructions
+  fill(220);
+  textSize(16);
+  textAlign(LEFT, CENTER);
+  let leftAlign = width/2 - 280;
+  text("Strumming (camera) :   Move RIGHT WRIST up and down to move", leftAlign, height/2 + 50);
+  text("Keyboard :   UP/DOWN arrows or W/S to move", leftAlign, height/2 + 85);
+  
+  // Pulsing Start Text
+  textAlign(CENTER, CENTER);
+  let pulse = map(sin(frameCount * 0.1), -1, 1, 120, 255);
+  fill(theme.player[0], theme.player[1], theme.player[2], pulse);
+  textSize(20);
+  text("Click to start with camera or Press SPACE to start with keyboard", width/2, height/2 + 140);
 }
 
 function drawGameOver() {
-  background(theme.bg[0], theme.bg[1], theme.bg[2], 20); // Fade effect
-  textAlign(CENTER, CENTER);
+  background(0, 200);
   
+  textAlign(CENTER, CENTER);
   fill(theme.enemy_high);
-  textSize(72);
-  text("GAME OVER", width/2, height/3);
+  textSize(64);
+  text("Game Over!!!", width/2, height/3);
+
+  // separator
+  stroke(255, 40);
+  line(width/2 - 200, height/2 - 40, width/2 + 200, height/2 - 40);
+
+  noStroke();
+  fill(255);
+  textSize(24);
+  text("Score: " + floor(score), width/2, height/2);
+  
+  // Achievement Ranking
+  let rank = "f - 180 (Antinode)";
+  if (score > 20) rank = "f - theta (Out of phase)";
+  if (score > 50) rank = "2f  (Second harmonic)";
+  if (score > 200) rank = "f (Fundemental frequency)";
   
   fill(theme.player);
-  textSize(30);
-  text(`Score: ${floor(score)}`, width/2, height/2);
-  
-  fill(theme.lane_divider);
-  text("Click to start with camera or Press SPACE to restart with keyboard", width/2, height/2 + 50);
+  textSize(32);
+  text("Rank: " + rank, width/2, height/2 + 60);
+
+  fill(200);
+  textSize(18);
+  text("Click to start with camera or Press SPACE to restart with keyboard", width/2, height/2 + 130);
 }
 
-// --- Input Handling ---
+// Input Handling
 function keyPressed() {
   inputBuffer += key.toUpperCase();
   if (inputBuffer.length > 10) inputBuffer = inputBuffer.substring(1);
